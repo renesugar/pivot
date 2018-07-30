@@ -12,7 +12,6 @@ import (
 	"github.com/ghetzel/pivot/dal"
 	"github.com/ghetzel/pivot/filter"
 	"github.com/gocql/gocql"
-	"github.com/guregu/dynamo"
 )
 
 type CassandraBackend struct {
@@ -96,53 +95,18 @@ func (self *CassandraBackend) Exists(name string, id interface{}) bool {
 }
 
 func (self *CassandraBackend) Retrieve(name string, id interface{}, fields ...string) (*dal.Record, error) {
-	if flt, query, err := self.getSingleRecordQuery(name, id, fields...); err == nil {
-		output := make(map[string]interface{})
 
-		if err := query.One(&output); err == nil {
-			record := dal.NewRecord(output[flt.IdentityField])
-			delete(output, flt.IdentityField)
-			record.SetFields(output)
-
-			return record, nil
-		} else if err == dynamo.ErrNotFound {
-			return nil, fmt.Errorf("Record %v does not exist", id)
-		} else if err == dynamo.ErrTooMany {
-			return nil, fmt.Errorf("Too many records found for ID %v", id)
-		} else {
-			return nil, fmt.Errorf("query error: %v", err)
-		}
-	} else {
-		return nil, err
-	}
 }
 
 func (self *CassandraBackend) Insert(name string, records *dal.RecordSet) error {
-	if collection, err := self.GetCollection(name); err == nil {
-		return self.upsertRecords(collection, records, true)
-	} else {
-		return err
-	}
+
 }
 
 func (self *CassandraBackend) Update(name string, records *dal.RecordSet, target ...string) error {
-	if collection, err := self.GetCollection(name); err == nil {
-		return self.upsertRecords(collection, records, false)
-	} else {
-		return err
-	}
+
 }
 
 func (self *CassandraBackend) Delete(name string, ids ...interface{}) error {
-	for _, id := range ids {
-		if op, err := self.getSingleRecordDelete(name, id); err == nil {
-			op.Run()
-
-			// TODO: call IndexRemove here
-		} else {
-			return err
-		}
-	}
 
 	return nil
 }
@@ -152,16 +116,7 @@ func (self *CassandraBackend) CreateCollection(definition *dal.Collection) error
 }
 
 func (self *CassandraBackend) DeleteCollection(name string) error {
-	if _, err := self.GetCollection(name); err == nil {
-		if err := self.db.Table(name).DeleteTable().Run(); err == nil {
-			self.tableCache.Delete(name)
-			return nil
-		} else {
-			return err
-		}
-	} else {
-		return err
-	}
+
 }
 
 func (self *CassandraBackend) ListCollections() ([]string, error) {
@@ -199,17 +154,6 @@ func (self *CassandraBackend) Flush() error {
 	}
 
 	return nil
-}
-
-func (self *CassandraBackend) toDalType(t dynamo.KeyType) dal.Type {
-	switch t {
-	case dynamo.BinaryType:
-		return dal.RawType
-	case dynamo.NumberType:
-		return dal.FloatType
-	default:
-		return dal.StringType
-	}
 }
 
 func (self *CassandraBackend) cacheTable(name string) (*dal.Collection, error) {
@@ -311,120 +255,6 @@ func (self *CassandraBackend) toRecordKeyFilter(collection *dal.Collection, id i
 	} else {
 		return nil, nil, fmt.Errorf("First ID component must not be nil")
 	}
-}
-
-func (self *CassandraBackend) getSingleRecordQuery(name string, id interface{}, fields ...string) (*filter.Filter, *dynamo.Query, error) {
-	if collection, err := self.GetCollection(name); err == nil {
-		if flt, rangeKey, err := self.toRecordKeyFilter(collection, id); err == nil {
-			if hashKeyValue, ok := flt.GetIdentityValue(); ok {
-				query := self.db.Table(collection.Name).Get(flt.IdentityField, hashKeyValue)
-
-				query.Consistent(self.cs.OptBool(`readsConsistent`, true))
-				query.Limit(int64(flt.Limit))
-
-				querylog.Debugf("[%T] retrieve: %v %v", self, collection.Name, id)
-
-				if rangeKey != nil {
-					if rV, ok := flt.GetValues(rangeKey.Name); ok {
-						query.Range(rangeKey.Name, dynamo.Equal, rV...)
-					} else {
-						return nil, nil, fmt.Errorf("Could not determine range key value")
-					}
-				}
-
-				return flt, query, nil
-			} else {
-				return nil, nil, fmt.Errorf("Could not determine hash key value")
-			}
-		} else {
-			return nil, nil, fmt.Errorf("filter create error: %v", err)
-		}
-	} else {
-		return nil, nil, err
-	}
-}
-
-func (self *CassandraBackend) getSingleRecordDelete(name string, id interface{}) (*dynamo.Delete, error) {
-	if collection, err := self.GetCollection(name); err == nil {
-		if flt, rangeKey, err := self.toRecordKeyFilter(collection, id); err == nil {
-			if hashKeyValue, ok := flt.GetIdentityValue(); ok {
-				deleteOp := self.db.Table(collection.Name).Delete(flt.IdentityField, hashKeyValue)
-
-				if rangeKey != nil {
-					if rV, ok := flt.GetValues(rangeKey.Name); ok && len(rV) > 0 {
-						deleteOp.Range(rangeKey.Name, rV[0])
-					} else {
-						return nil, fmt.Errorf("Could not determine range key value")
-					}
-				}
-
-				return deleteOp, nil
-			} else {
-				return nil, fmt.Errorf("Could not determine hash key value")
-			}
-		} else {
-			return nil, fmt.Errorf("filter create error: %v", err)
-		}
-	} else {
-		return nil, err
-	}
-}
-
-func (self *CassandraBackend) upsertRecords(collection *dal.Collection, records *dal.RecordSet, isCreate bool) error {
-	for _, record := range records.Records {
-		item := make(map[string]interface{})
-
-		for k, v := range record.Fields {
-			if typeutil.IsZero(v) {
-				continue
-			}
-
-			switch v.(type) {
-			case *time.Time:
-				item[k] = v.(*time.Time).Format(time.RFC3339Nano)
-			case time.Time:
-				item[k] = v.(time.Time).Format(time.RFC3339Nano)
-			default:
-				item[k] = v
-			}
-		}
-
-		item[collection.IdentityField] = record.ID
-
-		op := self.db.Table(collection.Name).Put(item)
-
-		if isCreate {
-			expr := []string{`attribute_not_exists($)`}
-
-			exprValues := []interface{}{record.ID}
-
-			if rangeKey, ok := collection.GetFirstNonIdentityKeyField(); ok {
-				expr = append(expr, `attribute_not_exists($)`)
-
-				if v := record.Get(rangeKey.Name); v != nil {
-					exprValues = append(exprValues, v)
-				} else {
-					return fmt.Errorf("Cannot create record: missing range key")
-				}
-			}
-
-			op.If(strings.Join(expr, ` AND `), exprValues...)
-		}
-
-		if err := op.Run(); err != nil {
-			return err
-		}
-	}
-
-	if !collection.SkipIndexPersistence {
-		if search := self.WithSearch(collection); search != nil {
-			if err := search.Index(collection, records); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
 }
 
 func (self *CassandraBackend) collectionFromMetadata(name string, metadata *gocql.TableMetadata) (*dal.Collection, error) {

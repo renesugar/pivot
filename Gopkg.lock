@@ -282,6 +282,17 @@
   version = "v0.2.3"
 
 [[projects]]
+  branch = "master"
+  name = "github.com/gocql/gocql"
+  packages = [
+    ".",
+    "internal/lru",
+    "internal/murmur",
+    "internal/streams"
+  ]
+  revision = "e06f8c1bcd787e6bf0608288b314522f08cc7848"
+
+[[projects]]
   name = "github.com/golang/protobuf"
   packages = ["proto"]
   revision = "655cdfa588ea190e901bc5590e65d5621688847c"
@@ -302,6 +313,12 @@
   name = "github.com/grokify/html-strip-tags-go"
   packages = ["."]
   revision = "2e24dd3c29e5fe86a6ac41c713f2e2840b3062e6"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/hailocab/go-hostpool"
+  packages = ["."]
+  revision = "e80d13ce29ede4452c43dea11e79b9bc8a15b478"
 
 [[projects]]
   branch = "master"
@@ -568,6 +585,12 @@
   revision = "378d26f46672a356c46195c28f61bdb4c0a781dd"
 
 [[projects]]
+  name = "gopkg.in/inf.v0"
+  packages = ["."]
+  revision = "d2d2541c53f18d2a059457998ce2876cc8e67cbf"
+  version = "v0.9.1"
+
+[[projects]]
   branch = "v2"
   name = "gopkg.in/mgo.v2"
   packages = [
@@ -597,6 +620,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "b43688f734df3d4c829f41b1e4143ca77e678304a652adc9d91ea45dd5dbe159"
+  inputs-digest = "ade0d4057f605d554793c0de2b062af4cccb31422624f9a053ab53a57cd075ae"
   solver-name = "gps-cdcl"
   solver-version = 1
