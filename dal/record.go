@@ -17,12 +17,11 @@ import (
 var FieldNestingSeparator string = `.`
 
 type Record struct {
-	ID        interface{}            `json:"id"`
-	Fields    map[string]interface{} `json:"fields,omitempty"`
-	Data      []byte                 `json:"data,omitempty"`
-	Error     error                  `json:"error,omitempty"`
-	SkipEmbed bool                   `json:"-"`
-	Depth     int                    `json:"-"`
+	ID      interface{}              `json:"id"`
+	Fields  map[string]interface{}   `json:"fields,omitempty"`
+	Data    []byte                   `json:"data,omitempty"`
+	Error   error                    `json:"error,omitempty"`
+	Related map[string][]interface{} `json:"-"`
 }
 
 func NewRecord(id interface{}) *Record {

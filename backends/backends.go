@@ -74,14 +74,6 @@ func MakeBackend(connection dal.ConnectionString) (Backend, error) {
 }
 
 func InflateEmbeddedRecords(backend Backend, parent *dal.Collection, record *dal.Record, prepId func(interface{}) interface{}) error {
-	record.Depth += 1
-
-	if record.Depth > MaxRecordDepth {
-		return fmt.Errorf("Embedded record expansion exceeded maximum depth of %d", MaxRecordDepth)
-	} else if record.SkipEmbed {
-		return nil
-	}
-
 	// for each relationship
 	for _, relationship := range parent.EmbeddedCollections {
 		keys := sliceutil.CompactString(sliceutil.Stringify(sliceutil.Sliceify(relationship.Keys)))
