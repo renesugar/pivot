@@ -73,8 +73,16 @@ func MakeBackend(connection dal.ConnectionString) (Backend, error) {
 	}
 }
 
-func InflateEmbeddedRecords(backend Backend, parent *dal.Collection, record *dal.Record, prepId func(interface{}) interface{}) error { // for each relationship
+func InflateEmbeddedRecords(backend Backend, parent *dal.Collection, record *dal.Record, prepId func(interface{}) interface{}) error {
+	record.Depth += 1
 
+	if record.Depth > MaxRecordDepth {
+		return fmt.Errorf("Embedded record expansion exceeded maximum depth of %d", MaxRecordDepth)
+	} else if record.SkipEmbed {
+		return nil
+	}
+
+	// for each relationship
 	for _, relationship := range parent.EmbeddedCollections {
 		keys := sliceutil.CompactString(sliceutil.Stringify(sliceutil.Sliceify(relationship.Keys)))
 
@@ -86,11 +94,6 @@ func InflateEmbeddedRecords(backend Backend, parent *dal.Collection, record *dal
 			related = c
 		} else {
 			return fmt.Errorf("error in relationship %v: %v", keys, err)
-		}
-
-		if related.Name == parent.Name {
-			log.Debugf("not descending into %v to avoid loop", related.Name)
-			continue
 		}
 
 		var nestedFields []string

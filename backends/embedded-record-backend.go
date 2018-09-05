@@ -8,6 +8,8 @@ import (
 	"github.com/ghetzel/pivot/filter"
 )
 
+var MaxRecordDepth = 8
+
 type EmbeddedRecordBackend struct {
 	backend Backend
 	cache   sync.Map

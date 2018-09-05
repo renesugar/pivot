@@ -5,4 +5,5 @@ type Relationship struct {
 	Collection     *Collection `json:"-"`
 	CollectionName string      `json:"collection,omitempty"`
 	Fields         []string    `json:"fields,omitempty"`
+	Stop           bool        `json:"stop"`
 }
