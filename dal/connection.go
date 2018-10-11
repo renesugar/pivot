@@ -136,11 +136,17 @@ func (self *ConnectionString) HasOpt(key string) bool {
 	return ok
 }
 
-func (self *ConnectionString) OptString(key string, fallback string) string {
+func (self *ConnectionString) OptString(key string, fallbacks ...string) string {
 	if v := typeutil.V(self.Options[key]).String(); v != `` {
 		return v
 	} else {
-		return fallback
+		for _, fallback := range fallbacks {
+			if fallback != `` {
+				return fallback
+			}
+		}
+
+		return ``
 	}
 }
 

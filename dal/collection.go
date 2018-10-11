@@ -32,6 +32,7 @@ type Instantiator interface {
 
 type Collection struct {
 	Name                        string                  `json:"name"`
+	BackendID                   int                     `json:"backend_id"`
 	IndexName                   string                  `json:"index_name,omitempty"`
 	IndexCompoundFields         []string                `json:"index_compound_fields,omitempty"`
 	IndexCompoundFieldJoiner    string                  `json:"index_compound_field_joiner,omitempty"`

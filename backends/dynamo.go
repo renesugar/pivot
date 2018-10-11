@@ -2,6 +2,7 @@ package backends
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
 	"github.com/ghetzel/go-stockutil/log"
 	"github.com/ghetzel/go-stockutil/maputil"
+	"github.com/ghetzel/go-stockutil/pathutil"
 	"github.com/ghetzel/go-stockutil/sliceutil"
 	"github.com/ghetzel/go-stockutil/typeutil"
 	"github.com/ghetzel/pivot/v3/dal"
@@ -86,13 +88,36 @@ func (self *DynamoBackend) SetIndexer(indexConnString dal.ConnectionString) erro
 }
 
 func (self *DynamoBackend) Initialize() error {
-	var cred *credentials.Credentials
+	providers := make([]credentials.Provider, 0)
 
+	// add static credentials provided in the connection string with the highest precendence
 	if u, p, ok := self.cs.Credentials(); ok {
-		cred = credentials.NewStaticCredentials(u, p, self.cs.OptString(`token`, ``))
-	} else {
-		cred = credentials.NewEnvCredentials()
+		providers = append(providers, &credentials.StaticProvider{
+			Value: credentials.Value{
+				AccessKeyID:     u,
+				SecretAccessKey: p,
+				SessionToken:    self.cs.OptString(`token`),
+			},
+		})
 	}
+
+	// add envvar profile
+	providers = append(providers, &credentials.EnvProvider{})
+
+	// add credentials file provider
+	credentialsFile := self.cs.OptString(`credentialsFile`, os.Getenv(`AWS_SHARED_CREDENTIALS_FILE`), `~/.aws/credentials`)
+
+	if credentialsFile, err := pathutil.ExpandUser(credentialsFile); err == nil {
+		if pathutil.IsNonemptyFile(credentialsFile) {
+			providers = append(providers, &credentials.SharedCredentialsProvider{
+				Filename: credentialsFile,
+				Profile:  self.cs.OptString(`profile`, os.Getenv(`AWS_PROFILE`), `default`),
+			})
+		}
+	}
+
+	// aggregate all the credential providers into one chained provider
+	cred := credentials.NewChainCredentials(providers)
 
 	if _, err := cred.Get(); err != nil {
 		querylog.Debugf("[%v] failed to retrieve credentials: %v", self, err)
