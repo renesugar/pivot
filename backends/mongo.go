@@ -2,6 +2,7 @@ package backends
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -330,13 +331,16 @@ func (self *MongoBackend) recordFromResult(collection *dal.Collection, data map[
 			)),
 		)
 
-		for k, v := range data {
-			v = self.fromId(v)
-
-			if _, ok := collection.GetField(k); ok || len(collection.Fields) == 0 {
-				record.Set(k, v)
+		maputil.Walk(data, func(value interface{}, key []string, isLeaf bool) error {
+			if isLeaf {
+				if _, ok := collection.GetField(key[0]); ok || len(collection.Fields) == 0 {
+					keypath := strings.Join(key, `.`)
+					record.SetNested(keypath, self.fromId(value))
+				}
 			}
-		}
+
+			return nil
+		})
 
 		delete(record.Fields, MongoIdentityField)
 

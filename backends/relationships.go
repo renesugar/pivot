@@ -1,6 +1,7 @@
 package backends
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -22,11 +23,15 @@ type DeferredRecord struct {
 	AllowMissing   bool
 }
 
+func (self *DeferredRecord) MarhsalJSON() ([]byte, error) {
+	return json.Marshal(self.Original)
+}
+
 func (self *DeferredRecord) GroupKey(id ...interface{}) string {
 	base := fmt.Sprintf("%v:%v", self.Backend.String(), self.CollectionName)
 
 	if len(id) > 0 {
-		base += fmt.Sprintf(":%v", id[0])
+		base += `:` + stringutil.MustString(id[0])
 	}
 
 	if len(self.Keys) > 0 {
@@ -41,24 +46,11 @@ func (self *DeferredRecord) String() string {
 }
 
 type recordFieldValue struct {
-	Record   *dal.Record
-	Key      []string
-	Value    interface{}
-	Deferred *DeferredRecord
-}
-
-func (self *DeferredRecord) Resolve() (map[string]interface{}, error) {
-	if name := self.CollectionName; name != `` {
-		if record, err := self.Backend.Retrieve(name, self.ID, self.Keys...); err == nil {
-			return record.Fields, nil
-		} else if self.AllowMissing {
-			return nil, nil
-		} else {
-			return nil, err
-		}
-	} else {
-		return nil, fmt.Errorf("collection not specified")
-	}
+	Record     *dal.Record
+	Collection *dal.Collection
+	Key        []string
+	Value      interface{}
+	Deferred   *DeferredRecord
 }
 
 func PopulateRelationships(backend Backend, parent *dal.Collection, record *dal.Record, prepId func(interface{}) interface{}, requestedFields ...string) error { // for each relationship
@@ -161,7 +153,7 @@ func PopulateRelationships(backend Backend, parent *dal.Collection, record *dal.
 					for i, result := range results {
 						nestKey := strings.Replace(key, `*`, fmt.Sprintf("%d", i), 1)
 						record.SetNested(nestKey, result)
-						// log.Debugf("%v.%v[%d]: Deferred record %v", parent.Name, key, i, result)
+						// log.Debugf("%v.%v: Deferred record %v", parent.Name, nestKey, result)
 					}
 
 				} else {
@@ -206,15 +198,20 @@ func ResolveDeferredRecords(cache map[string]interface{}, records ...*dal.Record
 	for _, record := range records {
 		if err := maputil.Walk(record.Fields, func(value interface{}, key []string, isLeaf bool) error {
 			if deferred, ok := value.(DeferredRecord); ok {
+				if subdefer, ok := deferred.Original.(*DeferredRecord); ok {
+					deferred = *subdefer
+				}
+
 				dptr := &deferred
 				deferset := deferredRecords[deferred.GroupKey()]
 				deferset = append(deferset, dptr)
 				deferredRecords[deferred.GroupKey()] = deferset
 
 				resolvedValues = append(resolvedValues, &recordFieldValue{
-					Record: record,
-					Key:    key,
-					Value:  deferred.ID,
+					Deferred: dptr,
+					Record:   record,
+					Key:      key,
+					Value:    deferred.ID,
 				})
 
 				maputil.DeepSet(record.Fields, key, nil)
@@ -259,7 +256,11 @@ func ResolveDeferredRecords(cache map[string]interface{}, records ...*dal.Record
 							if _, ok := cache[key]; ok {
 								continue
 							} else if record, err := backend.Retrieve(relatedCollectionName, id, fields...); err == nil {
-								cache[key] = record.Fields
+								if err := ResolveDeferredRecords(cache, record); err == nil {
+									cache[key] = record.Fields
+								} else {
+									return err
+								}
 							} else {
 								return err
 							}
@@ -275,14 +276,18 @@ func ResolveDeferredRecords(cache map[string]interface{}, records ...*dal.Record
 
 						// query all items at once
 						if recordset, err := indexer.Query(related, bulkQuery); err == nil {
-							for _, relatedRecord := range recordset.Records {
-								key := keyFn(relatedRecord.ID)
+							if err := ResolveDeferredRecords(cache, recordset.Records...); err == nil {
+								for _, relatedRecord := range recordset.Records {
+									key := keyFn(relatedRecord.ID)
 
-								if _, ok := cache[key]; ok {
-									continue
-								} else {
-									cache[key] = relatedRecord.Fields
+									if _, ok := cache[key]; ok {
+										continue
+									} else {
+										cache[key] = relatedRecord.Fields
+									}
 								}
+							} else {
+								return err
 							}
 						} else {
 							return err
@@ -291,16 +296,18 @@ func ResolveDeferredRecords(cache map[string]interface{}, records ...*dal.Record
 				} else {
 					return err
 				}
-
-				// replace each deferred record field with the now-populated related data item
-				for _, field := range resolvedValues {
-					key := keyFn(field.Value)
-
-					if data, ok := cache[key].(map[string]interface{}); ok {
-						maputil.DeepSet(field.Record.Fields, field.Key, data)
-					}
-				}
 			}
+		}
+	}
+
+	// replace each deferred record field with the now-populated related data item
+	for _, field := range resolvedValues {
+		key := field.Deferred.GroupKey(field.Value)
+
+		if data, ok := cache[key].(map[string]interface{}); ok {
+			maputil.DeepSet(field.Record.Fields, field.Key, data)
+		} else {
+			maputil.DeepSet(field.Record.Fields, field.Key, nil)
 		}
 	}
 
