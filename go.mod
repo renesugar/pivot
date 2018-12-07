@@ -32,6 +32,7 @@ require (
 	github.com/ghetzel/cli v1.17.0
 	github.com/ghetzel/diecast v1.9.29
 	github.com/ghetzel/go-stockutil v1.6.23
+	github.com/ghetzel/pivot v2.5.0+incompatible // indirect
 	github.com/ghodss/yaml v1.0.0
 	github.com/glycerine/go-unsnap-stream v0.0.0-20180323001048-9f0cb55181dd // indirect
 	github.com/glycerine/goconvey v0.0.0-20180728074245-46e3a41ad493 // indirect

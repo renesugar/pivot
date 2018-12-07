@@ -5,46 +5,69 @@ import (
 	"strings"
 
 	"github.com/ghetzel/go-stockutil/log"
-	"github.com/ghetzel/go-stockutil/maputil"
+	// "github.com/ghetzel/go-stockutil/maputil"
 	"github.com/ghetzel/go-stockutil/sliceutil"
 	"github.com/ghetzel/go-stockutil/stringutil"
 	"github.com/ghetzel/go-stockutil/typeutil"
 	"github.com/ghetzel/pivot/v3/dal"
-	"github.com/ghetzel/pivot/v3/filter"
+	// "github.com/ghetzel/pivot/v3/filter"
 )
 
 type DeferredRecord struct {
-	Original          interface{}
-	Backend           Backend
-	IdentityFieldName string
-	CollectionName    string
-	ID                interface{}
-	Keys              []string
+	Backend           Backend     `json:"-"`
+	Resolved          bool        `json:"-"`
+	Deferred          bool        `json:"_deferred"`
+	CollectionName    string      `json:"_collection"`
+	IdentityFieldName string      `json:"_identity_field_name"`
+	ID                interface{} `json:"_id"`
+	Key               string      `json:"_key"`
+	Fields            []string    `json:"_fields,omitempty"`
+	expanded          interface{}
 }
 
-func (self *DeferredRecord) GroupKey(id ...interface{}) string {
+func (self *DeferredRecord) CacheKey(id interface{}) string {
 	base := fmt.Sprintf("%v:%v", self.Backend.String(), self.CollectionName)
+	base += fmt.Sprintf(":%v", id)
 
-	if len(id) > 0 {
-		base += fmt.Sprintf(":%v", id[0])
-	}
-
-	if len(self.Keys) > 0 {
-		return base + `@` + strings.Join(self.Keys, `,`)
+	if len(self.Fields) > 0 {
+		return base + `@` + strings.Join(self.Fields, `,`)
 	} else {
 		return base
 	}
 }
 
-func (self *DeferredRecord) String() string {
-	return self.GroupKey(self.ID)
+func (self *DeferredRecord) Resolve() error {
+	if !self.Resolved {
+		self.Resolved = true
+		if record, err := self.Backend.Retrieve(self.CollectionName, self.ID, self.Fields...); err == nil {
+			data := make(map[string]interface{})
+
+			for k, v := range record.Fields {
+				if len(self.Fields) == 0 || sliceutil.ContainsString(self.Fields, k) {
+					data[k] = v
+				}
+			}
+
+			data[self.IdentityFieldName] = record.ID
+			self.expanded = data
+		} else {
+			return err
+		}
+	}
+
+	return nil
 }
 
-type recordFieldValue struct {
-	Record   *dal.Record
-	Key      []string
-	Value    interface{}
-	Deferred *DeferredRecord
+// func (self *DeferredRecord) MarshalJSON() ([]byte, error) {
+// 	if err := self.Resolve(); err == nil {
+// 		return json.Marshal(self.expanded)
+// 	} else {
+// 		return nil, err
+// 	}
+// }
+
+func (self *DeferredRecord) String() string {
+	return self.CacheKey(self.ID)
 }
 
 func PopulateRelationships(backend Backend, parent *dal.Collection, record *dal.Record, prepId func(interface{}) interface{}, requestedFields ...string) error { // for each relationship
@@ -109,6 +132,16 @@ func PopulateRelationships(backend Backend, parent *dal.Collection, record *dal.
 
 		reqfields = sliceutil.CompactString(reqfields)
 
+		// type DeferredRecord struct {
+		// 	Original          interface{}
+		// 	Backend           Backend
+		// 	IdentityFieldName string
+		// 	CollectionName    string
+		// 	ID                interface{}
+		// 	Key               string
+		// 	Fields            []string
+		// }
+
 		// finally, further constraing the fieldset by those fields being requested
 		if len(nestedFields) == 0 {
 			nestedFields = reqfields
@@ -117,71 +150,41 @@ func PopulateRelationships(backend Backend, parent *dal.Collection, record *dal.
 		}
 
 		for _, key := range keys {
-			keyBefore, _ := stringutil.SplitPair(key, `.*`)
+			if strings.Contains(key, `*`) {
+				keyBefore, keyAfter := stringutil.SplitPair(key, `.*`)
 
-			if nestedId := record.Get(key); nestedId != nil {
-				if typeutil.IsArray(nestedId) {
-					results := make([]interface{}, 0)
+				parentArray := record.Get(keyBefore)
 
-					for _, id := range sliceutil.Sliceify(nestedId) {
-						if prepId != nil {
-							id = prepId(id)
-						}
+				if typeutil.IsArray(parentArray) {
+					for i, el := range sliceutil.Sliceify(parentArray) {
+						abskey := fmt.Sprintf("%v.%d%v", keyBefore, i, keyAfter)
 
-						if id != nil {
-							results = append(results, &DeferredRecord{
-								Original:          nestedId,
+						if typeutil.IsScalar(el) && el != nil {
+							record.SetNested(abskey, &DeferredRecord{
+								Deferred:          true,
 								Backend:           backend,
 								IdentityFieldName: related.GetIdentityFieldName(),
 								CollectionName:    related.Name,
-								ID:                id,
-								Keys:              nestedFields,
+								ID:                el,
+								Key:               abskey,
+								Fields:            nestedFields,
 							})
-						} else if parent.AllowMissingEmbeddedRecords {
-							results = append(results, &DeferredRecord{
-								Original:          nestedId,
-								Backend:           backend,
-								IdentityFieldName: related.GetIdentityFieldName(),
-								CollectionName:    related.Name,
-								ID:                id,
-								Keys:              nestedFields,
-							})
-						} else {
-							return fmt.Errorf("%v.%v[]: Related record %v.%v is missing", parent.Name, keyBefore, related.Name, nestedId)
 						}
 					}
+				}
+			} else {
+				el := record.Get(key)
 
-					// clear out the array we're modifying
-					// record.SetNested(keyBefore, []interface{}{})
-
-					for i, result := range results {
-						nestKey := strings.Replace(key, `*`, fmt.Sprintf("%d", i), 1)
-						record.SetNested(nestKey, result)
-						// log.Debugf("%v.%v[%d]: Deferred record %v", parent.Name, key, i, result)
-					}
-
-				} else {
-					original := nestedId
-
-					if prepId != nil {
-						nestedId = prepId(nestedId)
-					}
-
-					if nestedId == nil && !parent.AllowMissingEmbeddedRecords {
-						return fmt.Errorf("%v.%v: Related record referred to in %v.%v is missing", parent.Name, keyBefore, related.Name, original)
-					}
-
-					deferred := &DeferredRecord{
-						Original:          nestedId,
+				if typeutil.IsScalar(el) && el != nil {
+					record.SetNested(key, &DeferredRecord{
+						Deferred:          true,
 						Backend:           backend,
 						IdentityFieldName: related.GetIdentityFieldName(),
 						CollectionName:    related.Name,
-						ID:                nestedId,
-						Keys:              nestedFields,
-					}
-
-					record.SetNested(keyBefore, deferred)
-					// log.Debugf("%v.%v: Deferred record %v", parent.Name, key, deferred)
+						ID:                el,
+						Key:               key,
+						Fields:            nestedFields,
+					})
 				}
 			}
 		}
@@ -191,144 +194,6 @@ func PopulateRelationships(backend Backend, parent *dal.Collection, record *dal.
 }
 
 func ResolveDeferredRecords(cache map[string]interface{}, records ...*dal.Record) error {
-	deferredRecords := make(map[string][]*DeferredRecord)
-	resolvedValues := make([]*recordFieldValue, 0)
-
-	if cache == nil {
-		cache = make(map[string]interface{})
-	}
-
-	// first pass: get all DeferredRecord values from all records
-	//             and map them to each record
-	for _, record := range records {
-		if err := maputil.WalkStruct(record.Fields, func(value interface{}, key []string, isLeaf bool) error {
-			if deferred, ok := value.(DeferredRecord); ok {
-				dptr := &deferred
-				deferset := deferredRecords[deferred.GroupKey()]
-				deferset = append(deferset, dptr)
-				deferredRecords[deferred.GroupKey()] = deferset
-
-				resolvedValues = append(resolvedValues, &recordFieldValue{
-					Record:   record,
-					Key:      key,
-					Value:    deferred.ID,
-					Deferred: dptr,
-				})
-
-				maputil.DeepSet(record.Fields, key, nil)
-				return maputil.SkipDescendants
-			}
-
-			return nil
-		}); err != nil {
-			return err
-		}
-	}
-
-	// second pass:
-	// 1. go through the deferred values (already grouped by backend:collection:fieldset)
-	// 2. do a bulk retrieve of all the values IDs in each group
-	// 3. put the results into the cache map (keyed on backend:collection:ID:fieldset)
-	//
-	for _, collectionDefers := range deferredRecords {
-		if len(collectionDefers) > 0 {
-			var keyFn = collectionDefers[0].GroupKey
-			var backend = collectionDefers[0].Backend
-			var relatedCollectionName = collectionDefers[0].CollectionName
-			var fields = collectionDefers[0].Keys
-			var ids []interface{}
-
-			// gather all the ids for this deferred collection
-			for _, deferred := range collectionDefers {
-				ids = append(ids, deferred.ID)
-			}
-
-			// ids = sliceutil.Unique(ids)
-			foundIds := make([]interface{}, 0)
-
-			if len(ids) > 0 {
-				if related, err := backend.GetCollection(relatedCollectionName); err == nil {
-					indexer := backend.WithSearch(related)
-
-					if indexer == nil {
-						// no indexer: need to manually retrieve each record
-						for _, id := range ids {
-							key := keyFn(id)
-
-							if _, ok := cache[key]; ok {
-								continue
-							} else if record, err := backend.Retrieve(relatedCollectionName, id, fields...); err == nil {
-								// ensure that the ID always ends up in the related fieldset
-								record.Fields[related.IdentityField] = record.ID
-
-								cache[key] = record.Fields
-								foundIds = append(foundIds, record.ID)
-							} else {
-								return err
-							}
-						}
-					} else {
-						bulkQuery := filter.New().AddCriteria(filter.Criterion{
-							Field:  related.GetIdentityFieldName(),
-							Values: ids,
-						})
-
-						bulkQuery.Fields = fields
-						bulkQuery.Limit = 1048576
-
-						// query all items at once
-						if recordset, err := indexer.Query(related, bulkQuery); err == nil {
-							for _, record := range recordset.Records {
-								key := keyFn(record.ID)
-
-								if _, ok := cache[key]; ok {
-									continue
-								} else {
-									// ensure that the ID always ends up in the related fieldset
-									record.Fields[related.IdentityField] = record.ID
-
-									cache[key] = record.Fields
-									foundIds = append(foundIds, record.ID)
-								}
-							}
-						} else {
-							return err
-						}
-					}
-				} else {
-					return err
-				}
-
-				// figure out which records are missing and sub in a stand-in record
-				for _, deferred := range collectionDefers {
-					if sliceutil.Contains(foundIds, deferred.ID) {
-						continue
-					} else {
-						key := keyFn(deferred.ID)
-
-						if _, ok := cache[key]; ok {
-							continue
-						} else {
-							cache[key] = map[string]interface{}{
-								deferred.IdentityFieldName: deferred.ID,
-								`_missing`:                 true,
-								`_collection`:              deferred.CollectionName,
-							}
-						}
-					}
-				}
-
-				// replace each deferred record field with the now-populated related data item
-				for _, field := range resolvedValues {
-					key := keyFn(field.Value)
-
-					if data, ok := cache[key].(map[string]interface{}); ok {
-						maputil.DeepSet(field.Record.Fields, field.Key, data)
-					}
-				}
-			}
-		}
-	}
 
 	return nil
 }
